@@ -1,0 +1,47 @@
+name: Deploy to Azure VM
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USERNAME }}
+          password: ${{ secrets.VM_PASSWORD }}
+          envs: GH_PAT,GH_REPO
+          script: |
+            # Ensure Docker daemon is running
+            if ! docker info > /dev/null 2>&1; then
+              echo "Docker is not running. Starting Docker..."
+              sudo systemctl start docker
+              sleep 3
+            fi
+
+            REPO_DIR="$HOME/${{ vars.APP_NAME }}"
+            REMOTE_URL="https://${GH_PAT}@github.com/${GH_REPO}.git"
+            if [ -d "$REPO_DIR/.git" ]; then
+              git -C "$REPO_DIR" remote set-url origin "$REMOTE_URL"
+            else
+              git clone "$REMOTE_URL" "$REPO_DIR"
+            fi
+            git -C "$REPO_DIR" fetch origin
+            git -C "$REPO_DIR" checkout main
+            git -C "$REPO_DIR" reset --hard origin/main
+            cd "$REPO_DIR/app"
+            docker compose up -d --build --wait || {
+              echo "=== Deployment failed. Container logs: ==="
+              docker compose logs --tail=50
+              exit 1
+            }
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_REPO: ${{ github.repository }}
