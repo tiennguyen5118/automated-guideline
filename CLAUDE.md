@@ -5,6 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Authoritative references (read before planning or editing):
 - [docs/architecture.md](docs/architecture.md) — tech stack, repo layout, infra, testing matrix
 - [docs/convention.md](docs/convention.md) — Next.js/TypeScript coding conventions (file naming, folder structure, TS rules, RSC/client split, Server Actions, Route Handlers, Drizzle, Tailwind v4, testing, etc.)
+- [docs/evaluation-matrix.md](docs/evaluation-matrix.md) — hackathon scoring rubric; every plan must align to it
+- [docs/ai-integration-playbook.md](docs/ai-integration-playbook.md) — AI product patterns; anchor for any new model-facing code
 
 When these docs conflict with anything below, the docs win.
 
@@ -101,3 +103,19 @@ Active work item ID is stored in `.claude/current-workitem`.
 ## Branch Strategy
 
 GitHub Flow: feature branches off `main`, PRs back to `main` via squash merge. Branch naming: `feat/<id>-<slug>` or `fix/<id>-<slug>`. Commit subjects prefixed with `#<id>`, Conventional Commits style (see [docs/convention.md](docs/convention.md) §24).
+
+## Hackathon Context
+
+This repo is a template for an **AI-native hackathon**. Fill in `docs/evaluation-matrix.md` with the competition's scoring criteria before planning features. Fill in `docs/ai-integration-playbook.md` only if you need to deviate from its defaults.
+
+**Process rules:**
+- Every `requirement.md` must include an **Evaluation alignment** section mapping the feature to rubric criteria in [docs/evaluation-matrix.md](docs/evaluation-matrix.md).
+- Every `plan.md` that introduces or touches AI behavior must reference [docs/ai-integration-playbook.md](docs/ai-integration-playbook.md) and name the target service file under `app/src/services/`.
+
+**AI-first principles** (apply on every feature, not just obviously-AI ones):
+
+1. Every user-facing feature must have at least one AI-augmented path.
+2. Prefer LLM reasoning over hand-written branching when input is unstructured.
+3. All model I/O goes through `src/services/*.ts` — mirror the shape of [app/src/services/ai.ts](app/src/services/ai.ts). Never call `@anthropic-ai/sdk` from components, pages, or route handlers directly.
+4. Model calls must be Zod-validated, logged with `latency_ms`, and retry once on transient failure.
+5. Use the latest Claude family — Opus 4.6 (`claude-opus-4-6`) for deep reasoning, Sonnet 4.6 (`claude-sonnet-4-6`) as default, Haiku 4.5 (`claude-haiku-4-5-20251001`) for latency/cost-sensitive paths. Select via `env.ANTHROPIC_MODEL`; never hardcode.
