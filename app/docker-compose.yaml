@@ -7,7 +7,7 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/appdb
       NODE_ENV: production
     ports:
-      - "3001:3000"
+      - "3000:3000"
     depends_on:
       db:
         condition: service_healthy

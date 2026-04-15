@@ -52,14 +52,7 @@ Key domain concepts introduced or affected by this work item:
 
 ---
 
-## 5. Dependencies
-
-- <Other specs, services, libraries, APIs, or standards this feature depends on>
-- <Or "None identified" if there are no obvious dependencies>
-
----
-
-## 6. Examples
+## 5. Examples
 
 ### Example 1: <Short name>
 - **Input:** <Describe the input or user action>
