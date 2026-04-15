@@ -1,0 +1,47 @@
+name: Claude Code PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  claude:
+    name: Claude Code Review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are reviewing a pull request for this project
+
+            Title: ${{ github.event.pull_request.title }}
+
+            Description:
+            ${{ github.event.pull_request.body }}
+
+            Run `git diff ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}`
+            to inspect the changes, then provide:
+            1. Summary of changes
+            2. Bugs, security issues, or regressions
+            3. Code quality and maintainability concerns
+            4. Suggested improvements with file:line references
+
+            Post the review as a comment on PR #${{ github.event.pull_request.number }}
+            using the GitHub CLI (`gh pr comment`). Be concise and use GitHub-flavored markdown.
+          claude_args: |
+            --allowedTools "Bash(git diff:*),Bash(gh pr comment:*)"

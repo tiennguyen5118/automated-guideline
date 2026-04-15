@@ -10,8 +10,10 @@ Sources: Next.js docs, React docs, TypeScript handbook, Airbnb/Google style, ESL
 | Kind | Case | Example |
 |---|---|---|
 | Folder | `kebab-case` | `user-profile/` |
-| Route segment | `kebab-case` | `app/order-history/page.tsx` |
+| Route segment | `kebab-case`, explicit full word | `app/order-history/page.tsx` |
 | Dynamic segment | `[camelCase]` | `app/orders/[orderId]/page.tsx` |
+
+Route segments must be explicit, descriptive words. Never use single letters or cryptic abbreviations (e.g. `g/`, `u/`, `p/`) — use `guidelines/`, `users/`, `products/`. A reader should understand what a segment represents from its name alone, without context. Short-link style paths belong behind a rewrite/redirect, not in the folder tree.
 | React component file | `PascalCase.tsx` | `UserCard.tsx` |
 | Hook file | `camelCase.ts` starting `use` | `useAuth.ts` |
 | Util / lib | `kebab-case.ts` | `format-date.ts` |
@@ -35,16 +37,24 @@ src/
     api/<resource>/route.ts Route Handlers
   components/
     ui/                     primitives (Button, Input) — no business logic
-    <feature>/              feature components
-  features/<feature>/       feature-scoped: hooks, server actions, schemas
-  lib/                      cross-cutting utils (db, auth, logger, fetcher)
-  db/                       Drizzle schema + migrations
+    app/                    route-scoped components; subfolders mirror src/app/ segments 1:1
+                            (e.g. src/app/admin/page.tsx → src/components/app/admin/*)
+    auth/                   auth-related components
+    icons/                  icon components
+    landing/                landing page components
+    layout/                 layout components (header, footer, shells)
+  contexts/                 React Context providers (AuthContext, ThemeContext, …) + index.ts barrel
+  services/                 data/API clients and domain services (api.ts, ai.ts, users.ts, …) + index.ts barrel
   hooks/                    shared hooks
+  lib/                      cross-cutting utils (db, auth, logger, fetcher, zod schemas, server actions)
+  db/                       Drizzle schema + migrations
   types/                    shared global types
   styles/                   globals.css, tailwind layers
 ```
 
-Rule: import direction is `app → features → components → lib`. Never upward.
+Rule: import direction is `app → contexts → components → services → hooks → lib`. Never upward. No `features/` folder — group code by kind (component / context / service / hook / lib), not by feature.
+
+`src/components/app/` mirrors `src/app/` route structure: each route segment that needs components gets a matching subfolder. Route files (`page.tsx`, `layout.tsx`) stay thin and compose function components from the parallel `components/app/<segment>/` folder. Route root (`src/app/page.tsx`) maps to `components/app/home/`. Cross-route reusable pieces go under `components/ui/`, `components/layout/`, etc. — not `components/app/`.
 
 ---
 
@@ -116,7 +126,7 @@ export function UserCard({ user, onSelect }: UserCardProps) {
 
 ## 7. Server Actions
 
-- File: `features/<feature>/actions.ts`, starts with `'use server'`.
+- File: `lib/actions/<domain>.ts` (or colocated under `services/` when tightly bound to a service), starts with `'use server'`.
 - Always validate input with Zod before use.
 - Return shape: `{ ok: true; data } | { ok: false; error: string }`. Never throw to client.
 - Authorize inside the action; never trust client.
@@ -142,7 +152,7 @@ export async function createOrder(input: unknown) {
 - Request validation with Zod. Response typed via `NextResponse.json<T>()`.
 - Status codes: 200 ok, 201 created, 204 no-body, 400 validation, 401 unauth, 403 forbidden, 404 missing, 409 conflict, 422 semantic, 500 server.
 - Error body: `{ error: { code: string; message: string; details?: unknown } }`.
-- No business logic in handlers; delegate to `features/<feature>/service.ts`.
+- No business logic in handlers; delegate to `services/<domain>.ts`.
 - Set `export const dynamic`/`revalidate`/`runtime` explicitly when non-default.
 
 ---
@@ -154,7 +164,7 @@ export async function createOrder(input: unknown) {
 - Always `id` = `uuid` PK, `created_at`, `updated_at` timestamps with default `now()`.
 - Soft delete via `deleted_at` when required; never hard-delete audited rows.
 - Migrations: generate via `pnpm drizzle-kit generate`; review SQL; never edit applied migration.
-- Queries in `features/<feature>/repo.ts`. No raw SQL in components.
+- Queries in `services/<domain>.ts` (or `lib/repo/<domain>.ts` for lower-level repos). No raw SQL in components.
 - Transactions for multi-write operations.
 
 ---
@@ -278,7 +288,7 @@ No Redux in new code.
 - One behavior per test; name: `it('returns 401 when token missing')`.
 - No snapshot tests for dynamic UI.
 - Mock at network boundary (MSW), not module internals.
-- Coverage target: 80% lines on `features/` and `lib/`.
+- Coverage target: 80% lines on `services/` and `lib/`.
 
 ---
 

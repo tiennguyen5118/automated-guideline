@@ -43,16 +43,27 @@ Create the spec directory with `mkdir -p`.
 
 ## Step 4 — Analyze and write requirement.md
 
-Read the template at `.claude/skills/scan-requirement/requirement-template.md` and use it as the output format.
+Pick the template based on `System.WorkItemType`:
+- **Bug** → `.claude/skills/analyze-requirement/bug-template.md`
+- Anything else (User Story, Feature, Task, PBI, …) → `.claude/skills/analyze-requirement/requirement-template.md`
 
-**Analysis rules:**
+**Shared analysis rules:**
 - Treat raw Description and Acceptance Criteria as **input to analyze**, not content to dump.
-- Identify core intent, domain nouns, functional requirements, boundary conditions, dependencies, and examples.
 - Infer missing information and mark with `[ASSUMPTION]`.
-- If Acceptance Criteria are missing/vague, generate testable Given/When/Then criteria from the description.
-- Use RFC 2119: MUST (hard requirement), SHOULD (strong recommendation), MAY (optional).
-- Every requirement needs a unique ID (R1, R2, ...) and at least one AC referencing it.
+- If Acceptance Criteria are missing/vague, generate testable Given/When/Then criteria.
+
+**Feature/Story rules (requirement-template.md):**
+- Identify core intent, domain nouns, functional requirements, boundary conditions, dependencies, and examples.
+- Use RFC 2119: MUST / SHOULD / MAY.
+- Every requirement needs a unique ID (R1, R2, …) and at least one AC referencing it.
 - Include at least one valid and one edge-case example.
+
+**Bug rules (bug-template.md):**
+- Extract symptom, reproduction steps, environment, and evidence from the raw Description. Mark gaps as "Unknown" or "None provided" — do not fabricate repro steps.
+- Investigate the codebase to identify likely root cause; cite file paths + line numbers when found. If the bug cannot be localized from the report alone, leave **Status: Unknown** and list investigation leads instead of guessing.
+- Propose a fix direction, but do NOT implement it — this skill produces analysis only.
+- Estimate effort and priority. If the bug is unrelated to current project context, already fixed, or not worth fixing now, say so explicitly in **Recommendation** (e.g. "Defer — unrelated to active scope" or "Won't fix — obsolete after X") and keep the rest of the template minimal.
+- Every reported symptom MUST have at least one AC verifying it is fixed (unless Recommendation is Won't fix).
 
 ## Step 5 — Confirm
 
