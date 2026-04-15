@@ -50,7 +50,7 @@ docker compose up db -d
 ## Architecture Notes
 
 - **Server Components** fetch data directly via Drizzle; **Client Components** call Route Handlers (`src/app/api/`).
-- Environment variables are validated at startup with `zod`. Local config lives in `app/.env.local` (copy from `.env.example`).
+- Environment variables are validated at startup with `zod`. Local config lives in `app/.env` (copy from `.env.example`).
 - Vite is only used for Vitest — Next.js uses its own bundler (Turbopack in dev, webpack in prod).
 - Production runs behind Nginx + Cloudflare on a Linux VM via Docker Compose.
 

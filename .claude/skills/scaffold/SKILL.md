@@ -88,7 +88,7 @@ export default defineConfig({
 ## Step 6 — Create app/vite.config.ts (Vitest)
 
 ```ts
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
@@ -113,9 +113,9 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 NODE_ENV=development
 ```
 
-Copy it to `.env.local`:
+Copy it to `.env`:
 ```bash
-cp app/.env.example app/.env.local
+cp app/.env.example app/.env
 ```
 
 ## Step 8 — Create app/Dockerfile
@@ -199,8 +199,8 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: secret
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: appdb
     ports:
       - "5432:5432"
@@ -224,7 +224,7 @@ Print:
 Scaffold complete.
 
 Next steps:
-  1. Edit app/.env.local if DATABASE_URL needs changing
+  1. Edit app/.env if DATABASE_URL needs changing
   2. cd app && docker compose up db -d
   3. cd app && pnpm drizzle-kit migrate
   4. pnpm dev         → http://localhost:3000

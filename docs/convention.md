@@ -336,7 +336,7 @@ Blank line between groups. No unused imports. No default re-exports from barrels
 
 ## 25. Environment & Config
 
-- `.env.local` (dev), never committed. `.env.example` is source of truth for keys.
+- `.env` (dev), never committed. `.env.example` is source of truth for keys.
 - Validated in `lib/env.ts` with Zod at startup; crash fast on missing.
 - Client-exposed vars must start with `NEXT_PUBLIC_`.
 - No runtime `process.env.X` reads outside `lib/env.ts`.

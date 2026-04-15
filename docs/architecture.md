@@ -50,7 +50,7 @@
 │   ├── tsconfig.json
 │   ├── package.json
 │   ├── .env.example
-│   ├── .env.local                ← local secrets (git-ignored)
+│   ├── .env                      ← local secrets (git-ignored)
 │   ├── Dockerfile                ← multi-stage production build
 │   └── docker-compose.yaml        ← Postgres + Nginx + Next.js app
 ├── docs/
@@ -143,7 +143,7 @@ GitHub Flow with Azure DevOps work item integration:
 
 ## Environment Variables
 
-Defined in `app/.env.local` (local) and container environment (production):
+Defined in `app/.env` (local) and container environment (production):
 
 | Variable | Description | Example |
 |---|---|---|
