@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm create:*)",
+      "Bash(pnpm add:*)",
+      "Bash(echo \"44\")",
+      "Bash(git fetch:*)",
+      "Bash(git checkout:*)",
+      "Bash(mkdir -p specs/features/44-automated-visual-guidelines)",
+      "Bash(ls:*)",
+      "Bash(pnpm drizzle-kit:*)",
+      "Bash(pnpm exec:*)",
+      "Bash(wait)",
+      "Bash(DATABASE_URL=postgresql://u:p@localhost:5432/db NEXT_PUBLIC_APP_URL=http://localhost:3000 ANTHROPIC_API_KEY=dummy pnpm build)",
+      "Bash(pnpm install *)",
+      "WebFetch(domain:github.com)",
+      "Bash(gh auth *)",
+      "Bash(git push *)",
+      "Bash(gh pr *)",
+      "Bash(cat /mnt/c/projects/github/automated-guideline/app/src/db/migrations/0000_*.sql)",
+      "Bash(git check-ignore *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  }
+}
