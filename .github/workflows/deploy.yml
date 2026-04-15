@@ -26,7 +26,9 @@ jobs:
               sleep 3
             fi
 
-            REPO_DIR="$HOME/${{ vars.APP_NAME }}"
+            REPO_NAME="${GH_REPO##*/}"
+            REPO_DIR="$HOME/$REPO_NAME"
+            mkdir -p "$REPO_DIR"
             REMOTE_URL="https://${GH_PAT}@github.com/${GH_REPO}.git"
             if [ -d "$REPO_DIR/.git" ]; then
               git -C "$REPO_DIR" remote set-url origin "$REMOTE_URL"
