@@ -53,7 +53,15 @@ docker compose up db -d
 - Environment variables are validated at startup with `zod`. Local config lives in `app/.env.local` (copy from `.env.example`).
 - Vite is only used for Vitest — Next.js uses its own bundler (Turbopack in dev, webpack in prod).
 - Production runs behind Nginx + Cloudflare on a Linux VM via Docker Compose.
-- 
+
+## Coding Principles
+
+Apply these on every edit, not just new features:
+
+1. **Think before coding.** Surface assumptions and tradeoffs. If a request has multiple reasonable interpretations, name them before picking one. Don't hide confusion.
+2. **Simplicity first.** Write the minimum code that solves the stated problem. No speculative abstractions, no flexibility for hypothetical future needs, no error handling for cases that can't happen. Ask: would a senior engineer call this overcomplicated?
+3. **Surgical changes.** Match the surrounding style. Don't refactor unbroken code. Only remove imports/functions that *your* change rendered obsolete — leave pre-existing dead code alone.
+4. **Goal-driven execution.** Turn the request into a verifiable success criterion (a test, a command, an observable behavior) and loop until it passes, rather than stopping at "looks right".
 
 ## Workflow — Skills & Work Items
 
