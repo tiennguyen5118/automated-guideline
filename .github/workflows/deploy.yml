@@ -17,7 +17,7 @@ jobs:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USERNAME }}
           password: ${{ secrets.VM_PASSWORD }}
-          envs: GH_PAT,GH_REPO
+          envs: GH_PAT,GH_REPO,ANTHROPIC_API_KEY,ANTHROPIC_MODEL,NEXT_PUBLIC_APP_URL,SESSION_COOKIE_NAME
           script: |
             # Ensure Docker daemon is running
             if ! docker info > /dev/null 2>&1; then
@@ -43,6 +43,15 @@ jobs:
             git -C "$REPO_DIR" checkout main
             git -C "$REPO_DIR" reset --hard origin/main
             cd "$REPO_DIR/app"
+            umask 077
+            cat > .env <<EOF
+            DATABASE_URL=postgresql://postgres:postgres@db:5432/appdb
+            ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+            ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-6}
+            NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}
+            SESSION_COOKIE_NAME=${SESSION_COOKIE_NAME:-ag_author}
+            NODE_ENV=production
+            EOF
             docker compose up -d --build --wait || {
               echo "=== Deployment failed. Container logs: ==="
               docker compose logs --tail=50
@@ -51,3 +60,7 @@ jobs:
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_REPO: ${{ github.repository }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+          NEXT_PUBLIC_APP_URL: ${{ vars.NEXT_PUBLIC_APP_URL }}
+          SESSION_COOKIE_NAME: ${{ vars.SESSION_COOKIE_NAME }}
