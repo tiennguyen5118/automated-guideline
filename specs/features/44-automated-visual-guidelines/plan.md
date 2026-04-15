@@ -7,18 +7,28 @@
 
 ## Summary
 
-Build a Next.js feature that lets an Author paste a policy/procedure text, runs an LLM-backed Generation Job to produce a structured diagram representation (Mermaid), renders it client-side, and lets the Author regenerate, edit, and publish a read-only shareable page. Guidelines, generations, and published visualizations are persisted in PostgreSQL via Drizzle. This plan covers the MVP vertical slice satisfying AC1–AC8; export (R8) and auth hardening are deferred.
+Build a Next.js feature that lets an Author paste a guideline, runs an LLM-backed generation job that emits a Mermaid diagram spec (flowchart for procedural / infographic-style "mindmap" for declarative content), renders the result client-side, and supports regenerate + publish to a shareable URL. Guidelines and their Visualizations are persisted in PostgreSQL via Drizzle. The system is minimal, server-rendered where possible, and uses Server Actions for mutations.
 
 ---
 
 ## Approach
 
-- **Data model**: three tables — `guidelines` (source text + latest draft pointer), `generations` (each run of the LLM with status/output/error), `publications` (immutable snapshot referenced by a public slug). Keeps job history for retry/audit and cleanly separates draft vs published state.
-- **Generation strategy**: a single Server Action invokes the Anthropic Claude API (`claude-sonnet-4-6`) with a structured prompt that classifies the content as `procedural` vs `declarative` and returns Mermaid source (`flowchart TD` for procedural, a constrained Mermaid layout used as an "infographic" card grid for declarative). Mermaid is chosen over React Flow because the LLM can emit it as text, and it renders offline in the browser via the `mermaid` package — no custom layout engine.
-- **Rendering**: client-only `<MermaidDiagram/>` component (dynamic import, `ssr: false`) takes the Mermaid source string and renders SVG. The Author page is a Server Component shell hydrating a small client island for the editor/preview. The public published page is a pure Server Component that reads from DB and renders the island read-only.
-- **Async model**: MVP runs generation inline inside the Server Action with a 60s timeout (AC8 target). No queue/worker — the `generations` table still records `status: pending|ok|error` so a future worker can take over without schema change. `revalidatePath` refreshes the draft page after generation/publish.
-- **Validation & errors**: Zod at every boundary (Server Action input, env, LLM response shape). Server Action returns the `{ ok: true; data } | { ok: false; error }` shape per convention. Errors from the model surface as the `error` string shown on the preview card with a "Retry" button (AC6).
-- **UI tone**: serious enterprise feel — neutral slate/zinc palette with a single desaturated indigo accent for primary actions, generous but dense spacing (`gap-6`, `px-6 py-5`), 14px body / 13px metadata, subtle 1px hairline borders (`border-zinc-200 dark:border-zinc-800`), no gradients, no emoji, no illustrations. Quiet hover/focus states (`hover:bg-zinc-50`, `focus-visible:ring-1 ring-zinc-400`). Two-pane layout on the editor page: left = source textarea + controls, right = preview/status. Typography via `next/font` (Geist Sans for UI, Geist Mono for the Mermaid source drawer).
+- **Synchronous generation over async job queue.** AC8 caps first preview at 60s which fits comfortably inside a Route Handler / Server Action timeout; introducing a worker, queue, or polling layer is speculative complexity. The `generation_jobs` table still exists (per the requirement's Model) but is written synchronously — one row per generation attempt, recording `status`, `error`, `latency_ms`. This leaves an upgrade path if we later move to a queue without reshaping data.
+- **LLM via Anthropic SDK on the server.** The model is prompted to classify the input (`procedural` vs `declarative`) and emit a **Mermaid** source string (`flowchart TD …` or `mindmap …`). Mermaid gives us text-only generation (no image parsing), in-browser rendering, deterministic storage, and trivial editing. Alternative (structured JSON → React Flow) was rejected: more moving parts and a custom renderer for zero user-visible benefit.
+- **Client renders Mermaid with `next/dynamic({ ssr: false })`.** Mermaid touches `window`; isolating it to a leaf client component keeps the rest of the tree RSC.
+- **Publish = flip a boolean + expose `/published/[slug]`.** No separate "published copy" table; the latest visualization flagged `is_published` is what `/published/[slug]` renders. Regenerate replaces the current draft visualization; publishing snapshots `mermaid_source` into an immutable `published_visualizations` row so later edits don't mutate the shared URL.
+- **No auth in this slice.** The requirement says "authenticated Author" but the project has no auth module yet. We stub an `Author` via a cookie-scoped session ID so rows have an owner column ready for real auth later. Flagged as a deliberate deviation below.
+
+### UI/UX direction
+
+Serious enterprise tool. The audience is policy authors and UI/UX reviewers — this must not look like a consumer AI demo.
+
+- **Palette.** Neutral slate. Background `zinc-50` (light) / `zinc-950` (dark). Surfaces `white` / `zinc-900`. Borders `zinc-200` / `zinc-800`. Text `zinc-900` / `zinc-100`. Single accent: `indigo-600` for primary action and focus ring only — no gradients, no illustrations, no emoji.
+- **Typography.** `next/font` Inter for UI, JetBrains Mono for the Mermaid source view. Base 14px, tabular numerals, tight tracking on headings.
+- **Layout.** Two-pane editor on `≥ lg`: left = source textarea + controls, right = live preview. Stacks on narrow viewports. Max content width 1440px. Dense-but-breathable spacing (8/12/16/24 rhythm).
+- **Components.** Use `components/ui/` primitives (Button, Textarea, Card, Alert, Badge, Spinner) built with `cva`. Button variants: `primary | secondary | ghost | destructive`. Quiet interaction: `hover:bg-zinc-100`, 150ms transitions, no scale transforms.
+- **States.** Loading = `Spinner` + `"Generating visualization…"` + disabled Generate button (`useFormStatus`). Error = `Alert` with `role="alert"` in red-800 on red-50 surface, retry button. Empty = muted helper text in the preview pane ("Paste a guideline and click Generate").
+- **Accessibility.** All controls labeled, focus-visible ring (`ring-2 ring-indigo-600 ring-offset-2`), keyboard-reachable Regenerate/Publish, Mermaid SVG gets `role="img"` + `aria-label` derived from the guideline title.
 
 ---
 
@@ -26,109 +36,121 @@ Build a Next.js feature that lets an Author paste a policy/procedure text, runs 
 
 | File | Change Type | Description |
 |------|-------------|-------------|
-| `app/package.json` | Modify | Add deps: `zod`, `@anthropic-ai/sdk`, `mermaid`, `react-hook-form`, `@hookform/resolvers`, `clsx`, `tailwind-merge`, `pino`, `nanoid` |
-| `app/.env.example` | Create | Document `DATABASE_URL`, `NEXT_PUBLIC_APP_URL`, `ANTHROPIC_API_KEY`, `GENERATION_TIMEOUT_MS` |
-| `app/src/lib/env.ts` | Create | Zod-validated env loader |
-| `app/src/lib/cn.ts` | Create | `cn()` = clsx + tailwind-merge |
-| `app/src/lib/logger.ts` | Create | Pino logger |
-| `app/src/lib/errors.ts` | Create | `ValidationError`, `GenerationError`, `NotFoundError` |
-| `app/src/db/schema.ts` | Modify | Define `guidelines`, `generations`, `publications` tables |
-| `app/src/db/migrations/0000_init.sql` | Create | Generated via `drizzle-kit generate` |
-| `app/src/features/guidelines/schemas.ts` | Create | Zod: `CreateGuidelineInput`, `GenerateInput`, `PublishInput`, `MermaidGenerationResult` |
-| `app/src/features/guidelines/repo.ts` | Create | Drizzle queries: `insertGuideline`, `updateGuidelineText`, `insertGeneration`, `markGenerationOk/Error`, `getGuidelineWithLatestGeneration`, `insertPublication`, `getPublicationBySlug` |
-| `app/src/features/guidelines/llm.ts` | Create | `generateVisualization(text)` — calls Anthropic, returns `{ kind: 'flowchart'|'infographic'; mermaid: string }`; enforces timeout + input length cap (≤ 2000 words) |
-| `app/src/features/guidelines/service.ts` | Create | Orchestration: `createGuideline`, `runGeneration`, `publishGuideline` |
-| `app/src/features/guidelines/actions.ts` | Create | `'use server'` — `createGuidelineAction`, `regenerateAction`, `publishAction`; Zod-validated, `{ ok, ... }` return shape |
-| `app/src/components/ui/Button.tsx` | Create | `cva`-based primary/secondary/ghost variants |
-| `app/src/components/ui/Textarea.tsx` | Create | Labeled textarea with error slot |
-| `app/src/components/ui/Card.tsx` | Create | Bordered surface primitive |
-| `app/src/components/ui/StatusBadge.tsx` | Create | Neutral pill for `pending/ok/error` |
-| `app/src/components/features/guidelines/MermaidDiagram.tsx` | Create | `'use client'`, dynamic `mermaid` import, renders SVG from source; surfaces parse errors |
-| `app/src/components/features/guidelines/GuidelineEditor.tsx` | Create | `'use client'`, two-pane layout, react-hook-form, calls Server Actions, shows pending/ok/error states |
-| `app/src/components/features/guidelines/PreviewPane.tsx` | Create | Wraps `MermaidDiagram`, empty/pending/error/ok visuals, retry button |
-| `app/src/app/layout.tsx` | Modify | Apply Geist font, set base slate palette, add `<header>` with product name only |
-| `app/src/app/globals.css` | Modify | Tailwind v4 `@theme` tokens (neutral + single indigo accent, radius, shadow) |
-| `app/src/app/page.tsx` | Modify | Landing: brief description + "New guideline" CTA linking to `/guidelines/new` |
-| `app/src/app/guidelines/new/page.tsx` | Create | Server Component: creates a draft on first paste via action, renders `GuidelineEditor` |
-| `app/src/app/guidelines/[guidelineId]/page.tsx` | Create | Server Component: loads draft + latest generation, renders `GuidelineEditor` hydrated with data |
-| `app/src/app/guidelines/[guidelineId]/loading.tsx` | Create | Skeleton of two-pane layout |
-| `app/src/app/guidelines/[guidelineId]/error.tsx` | Create | Client error boundary with reset |
-| `app/src/app/g/[slug]/page.tsx` | Create | Public read-only published visualization |
-| `app/src/app/g/[slug]/not-found.tsx` | Create | 404 for unknown slug |
-| `app/src/app/api/health/route.ts` | Create | `GET` returns `{ ok: true }` — smoke test endpoint |
-| `app/drizzle.config.ts` | Verify | Points to `src/db/schema.ts` and `src/db/migrations` |
-| `app/tailwind.config.ts` | Skip | Tailwind v4 uses CSS-based config via `@theme` — no JS config file |
+| `app/package.json` | Modify | Add deps: `zod`, `mermaid`, `@anthropic-ai/sdk`, `clsx`, `tailwind-merge`, `class-variance-authority`, `pino`, `react-hook-form`, `@hookform/resolvers`. Add scripts: `db:generate`, `db:migrate`, `typecheck`, `lint`, `e2e`. |
+| `app/.env.example` | Create | Document `DATABASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `NEXT_PUBLIC_APP_URL`, `SESSION_COOKIE_NAME`. |
+| `app/src/lib/env.ts` | Create | Zod-validated env loader; crash fast on missing. |
+| `app/src/lib/logger.ts` | Create | `pino` logger; `logger.child({ op })`. |
+| `app/src/lib/cn.ts` | Create | `cn()` helper (`clsx` + `tailwind-merge`). |
+| `app/src/lib/errors.ts` | Create | `ValidationError`, `GenerationError`, `NotFoundError`. |
+| `app/src/lib/session.ts` | Create | Cookie-based anonymous author ID (stub for real auth). `getOrCreateAuthorId()`. |
+| `app/src/lib/slug.ts` | Create | `generateSlug()` — 10-char base32 nanoid, URL-safe. |
+| `app/src/app/globals.css` | Modify | Replace default tokens with enterprise palette `@theme` block; import Inter + JetBrains Mono via `next/font` in `layout.tsx`. |
+| `app/src/app/layout.tsx` | Modify | Apply font classes, set lang, metadata, root container. |
+| `app/src/app/page.tsx` | Modify | Landing: brief product description + CTA → `/guidelines/new`. Replaces Next boilerplate. |
+| `app/src/app/guidelines/new/page.tsx` | Create | Server Component; renders `GuidelineEditor` client component. |
+| `app/src/app/guidelines/[guidelineId]/page.tsx` | Create | Draft editor for an existing guideline; loads row via Drizzle and hydrates `GuidelineEditor`. `params` awaited per Next 15. |
+| `app/src/app/published/[slug]/page.tsx` | Create | Public read-only view of a published visualization. `generateMetadata` for sharing. `notFound()` when missing. |
+| `app/src/app/published/[slug]/not-found.tsx` | Create | 404 for invalid slug. |
+| `app/src/app/api/guidelines/[guidelineId]/route.ts` | Create | `GET` returns guideline + latest visualization as JSON (used by regenerate flow's optimistic refresh). |
+| `app/src/components/ui/Button.tsx` | Create | `cva` variants. |
+| `app/src/components/ui/Textarea.tsx` | Create | Labeled textarea w/ char counter. |
+| `app/src/components/ui/Alert.tsx` | Create | `role="alert"` with `variant: info | error`. |
+| `app/src/components/ui/Card.tsx` | Create | Surface container. |
+| `app/src/components/ui/Spinner.tsx` | Create | Accessible spinner. |
+| `app/src/components/app/guidelines/GuidelineEditor.tsx` | Create | `'use client'`. Two-pane editor. Uses `react-hook-form` + Zod resolver, calls Server Actions. |
+| `app/src/components/app/guidelines/MermaidPreview.tsx` | Create | `'use client'`, `next/dynamic({ ssr: false })` Mermaid renderer. Resets on source change; captures render errors into `Alert`. |
+| `app/src/components/app/guidelines/PublishBar.tsx` | Create | Shows published URL + copy-link affordance after publish. |
+| `app/src/components/app/published/PublishedView.tsx` | Create | RSC-rendered wrapper that streams the Mermaid client component for read-only view. |
+| `app/src/services/guidelines.ts` | Create | DB access: `createGuideline`, `getGuidelineById`, `updateGuidelineSource`. |
+| `app/src/services/visualizations.ts` | Create | `upsertDraftVisualization`, `publishVisualization`, `getPublishedBySlug`. |
+| `app/src/services/generation-jobs.ts` | Create | `recordJob({ guidelineId, status, latencyMs, error })`. |
+| `app/src/services/ai.ts` | Create | `generateVisualization(text)` → `{ kind, mermaidSource }`. Wraps Anthropic SDK with a tuned system prompt, enforces max input length (2,000 words hard cap, 25,000 char absolute), retries once on transient errors. |
+| `app/src/lib/actions/guidelines.ts` | Create | `'use server'`. Actions: `generateAction`, `regenerateAction`, `publishAction`. All Zod-validate input, return `{ ok, data } \| { ok, error }`. `revalidatePath` on publish. |
+| `app/src/lib/schemas/guideline.schema.ts` | Create | `GuidelineInputSchema` (non-empty, ≤ 25,000 chars). |
+| `app/src/db/schema.ts` | Modify | Replace empty stub with barrel re-export. |
+| `app/src/db/schema/guidelines.ts` | Create | Table. |
+| `app/src/db/schema/visualizations.ts` | Create | Table (draft). |
+| `app/src/db/schema/published-visualizations.ts` | Create | Table (immutable snapshot). |
+| `app/src/db/schema/generation-jobs.ts` | Create | Table. |
+| `app/src/db/schema/index.ts` | Create | Barrel. |
+| `app/src/db/migrations/0000_init.sql` | Create | Generated via `drizzle-kit generate`. Committed. |
+| `app/drizzle.config.ts` | Modify | Point at `src/db/schema/index.ts`, output `src/db/migrations`. |
+| `app/src/app/guidelines/new/loading.tsx` | Create | Skeleton for editor segment. |
+| `app/src/app/guidelines/new/error.tsx` | Create | `'use client'` segment error boundary. |
+| `app/src/app/published/[slug]/loading.tsx` | Create | Skeleton for published view. |
+
+No tests in this plan — `/write-tests` and `/write-e2e-tests` run afterward.
+
+---
+
+## Data Model
+
+All tables follow convention (§9): `id uuid PK`, `created_at`, `updated_at`, snake_case plural table names.
+
+**`guidelines`**
+- `id uuid pk`, `author_id text not null` (session ID stub), `title text not null` (first 80 chars of source until we prompt the LLM for one), `source_text text not null`, `created_at`, `updated_at`.
+
+**`visualizations`** (the working/draft output; one per guideline, replaced on regenerate)
+- `id uuid pk`, `guideline_id uuid references guidelines(id) on delete cascade`, `kind text not null check (kind in ('flowchart','infographic'))`, `mermaid_source text not null`, `created_at`, `updated_at`.
+- Unique index on `guideline_id`.
+
+**`published_visualizations`** (immutable snapshot served at `/published/[slug]`)
+- `id uuid pk`, `guideline_id uuid references guidelines(id)`, `slug text not null unique`, `kind text not null`, `mermaid_source text not null`, `title text not null`, `published_at timestamptz not null default now()`.
+
+**`generation_jobs`**
+- `id uuid pk`, `guideline_id uuid references guidelines(id) on delete cascade`, `status text not null check (status in ('succeeded','failed'))`, `error text`, `latency_ms integer`, `created_at`.
 
 ---
 
 ## Implementation Steps
 
-### Step 1: Dependencies, env, and shared lib
-- **Files:** `package.json`, `.env.example`, `src/lib/env.ts`, `src/lib/cn.ts`, `src/lib/logger.ts`, `src/lib/errors.ts`
-- **What:** Install deps; add env schema (DATABASE_URL, ANTHROPIC_API_KEY, NEXT_PUBLIC_APP_URL, GENERATION_TIMEOUT_MS default 60000); create `cn`, pino logger (server-only), error subclasses.
-- **How:** `env.ts` uses `z.object(...).parse(process.env)` at module top; export typed `env`. `cn(...inputs)` = `twMerge(clsx(inputs))`.
+### Step 1 — Dependencies, env, and foundation utilities
+- **Files:** `package.json`, `.env.example`, `src/lib/env.ts`, `src/lib/logger.ts`, `src/lib/cn.ts`, `src/lib/errors.ts`, `src/lib/slug.ts`, `src/lib/session.ts`.
+- **What:** Install runtime deps. Stand up env validation, logger, `cn`, custom error classes, slug generator, and cookie-based author session.
+- **How:** `env.ts` exports a `z.object({ DATABASE_URL, ANTHROPIC_API_KEY, ANTHROPIC_MODEL: z.string().default('claude-sonnet-4-6'), NEXT_PUBLIC_APP_URL, SESSION_COOKIE_NAME: z.string().default('ag_author') }).parse(process.env)`. `session.ts` reads/sets an HttpOnly cookie holding a uuid; returns `authorId`. `slug.ts` uses `crypto.randomUUID()` → base32 truncated 10 chars.
 
-### Step 2: Database schema & migration
-- **Files:** `src/db/schema.ts`, `src/db/migrations/*`
-- **What:** Three tables with uuid PK, `created_at`, `updated_at`.
-  - `guidelines(id, title text, source_text text not null, created_at, updated_at)`
-  - `generations(id, guideline_id fk, status text check in (pending,ok,error), kind text null check in (flowchart,infographic), mermaid text null, error text null, created_at, updated_at)`
-  - `publications(id, guideline_id fk, generation_id fk, slug text unique not null, title text, mermaid text not null, kind text not null, created_at)`
-- **How:** Drizzle `pgTable` with `uuid().defaultRandom().primaryKey()`, `timestamp().defaultNow().notNull()`. Run `pnpm drizzle-kit generate` to produce SQL; commit it.
+### Step 2 — Drizzle schema + initial migration
+- **Files:** `src/db/schema/*.ts`, `src/db/schema/index.ts`, `drizzle.config.ts`, `src/db/migrations/0000_init.sql`.
+- **What:** Define four tables and generate the initial migration.
+- **How:** Use `pgTable`, `uuid('id').primaryKey().defaultRandom()`, `timestamp('created_at').defaultNow().notNull()`. Add unique index on `visualizations.guideline_id` and on `published_visualizations.slug`. Run `pnpm drizzle-kit generate`. Review the emitted SQL and commit it.
 
-### Step 3: Feature schemas & repo
-- **Files:** `features/guidelines/schemas.ts`, `features/guidelines/repo.ts`
-- **What:** Zod schemas for inputs + Mermaid result; repo functions wrapping Drizzle queries (no raw SQL).
-- **How:** `CreateGuidelineInput = z.object({ title: z.string().trim().max(200).optional(), sourceText: z.string().trim().min(1, 'Please paste guideline text').max(20000) })`. Repo exports small focused functions; transactions via `db.transaction` where publish writes two rows.
+### Step 3 — Services layer
+- **Files:** `src/services/guidelines.ts`, `src/services/visualizations.ts`, `src/services/generation-jobs.ts`.
+- **What:** CRUD functions, each with explicit return types.
+- **How:** All queries go through `db` from `src/db`. `upsertDraftVisualization({ guidelineId, kind, mermaidSource })` uses `onConflictDoUpdate` on `guideline_id`. `publishVisualization({ guidelineId })` opens a transaction: read draft, insert `published_visualizations` row with a new slug, return slug.
 
-### Step 4: LLM client
-- **Files:** `features/guidelines/llm.ts`
-- **What:** `generateVisualization(sourceText)` — validates word count ≤ 2000, calls Anthropic with a system prompt that requires a single JSON object `{ kind: 'flowchart'|'infographic', mermaid: string }`, parses with Zod, enforces `GENERATION_TIMEOUT_MS` via `AbortController`.
-- **How:** Use `@anthropic-ai/sdk`, model `claude-sonnet-4-6`, `max_tokens: 2000`. Prompt instructs: classify procedural vs declarative → emit `flowchart TD` for procedural, or a Mermaid flowchart with grouped subgraphs styled as an infographic card grid for declarative. Strip code fences before `JSON.parse`. Throw `GenerationError('TIMEOUT'|'OVERSIZED'|'MODEL_ERROR'|'INVALID_OUTPUT', cause)`.
+### Step 4 — AI service (generation)
+- **Files:** `src/services/ai.ts`.
+- **What:** Call Anthropic API; return `{ kind: 'flowchart' | 'infographic', mermaidSource: string }`.
+- **How:** Import `Anthropic` from `@anthropic-ai/sdk`. System prompt instructs the model to: (1) classify content as `procedural` (ordered steps / decisions) or `declarative` (policy / principles); (2) emit a single JSON object `{"kind":"flowchart"|"infographic","mermaid":"…"}`; (3) use `flowchart TD` for procedural, `mindmap` for declarative; (4) escape node labels. Parse with Zod (`z.object({ kind: z.enum(['flowchart','infographic']), mermaid: z.string().min(1) })`). Enforce `sourceText.length <= 25_000` before call → throw `ValidationError('TOO_LONG')`. On SDK transient error, retry once with 500 ms backoff. Log `{ event: 'ai.generate', kind, latency_ms }`.
 
-### Step 5: Service + Server Actions
-- **Files:** `features/guidelines/service.ts`, `features/guidelines/actions.ts`
-- **What:** Service orchestrates repo + llm; actions validate input, call service, return `{ ok, data | error }`, call `revalidatePath`.
-- **How:**
-  - `createGuidelineAction(input)` → insert guideline + pending generation → run `generateVisualization` → mark ok/error → return `{ ok: true, data: { guidelineId } }` and redirect client-side to `/guidelines/:id`.
-  - `regenerateAction({ guidelineId, sourceText })` → update guideline text → new pending generation → run → mark ok/error.
-  - `publishAction({ guidelineId })` → load latest ok generation (reject otherwise) → insert publication with `slug = nanoid(10)` → return slug.
-  - All catch `GenerationError` and map to user-facing messages; unknown errors logged with pino and mapped to generic "Generation failed".
+### Step 5 — Server Actions
+- **Files:** `src/lib/actions/guidelines.ts`, `src/lib/schemas/guideline.schema.ts`.
+- **What:** `generateAction(formData) → { ok, data: { guidelineId, kind, mermaid } } | { ok:false, error }`. `regenerateAction({ guidelineId, sourceText })`. `publishAction({ guidelineId }) → { ok:true, data: { slug, url } }`.
+- **How:** Each action: `'use server'`, Zod-validate, resolve `authorId` via session, wrap core work in `try/catch`, record a `generation_jobs` row with `status` + `latency_ms`, never throw to client. `publishAction` calls `revalidatePath('/published/' + slug)`.
 
-### Step 6: UI primitives & tokens
-- **Files:** `app/globals.css`, `components/ui/*`
-- **What:** Tailwind v4 `@theme` with tokens: `--color-bg: #fafafa`, `--color-surface: #ffffff`, `--color-border: #e4e4e7`, `--color-fg: #18181b`, `--color-muted: #52525b`, `--color-accent: #4f46e5` (indigo-600, used sparingly), `--radius-card: 6px`. Button variants: primary (accent bg, white fg), secondary (surface + border), ghost. All with `focus-visible:ring-1 ring-zinc-400`.
-- **How:** Single accent only on primary CTAs ("Generate", "Publish"). Destructive/retry uses zinc-900 outline, not red — errors communicated via copy + a small `StatusBadge` in a warning-neutral tone (`bg-amber-50 text-amber-900 border-amber-200`), used sparingly.
+### Step 6 — UI primitives and design tokens
+- **Files:** `src/app/globals.css`, `src/app/layout.tsx`, `src/components/ui/*`.
+- **What:** Define enterprise palette, load fonts, build Button/Textarea/Alert/Card/Spinner with `cva`.
+- **How:** In `globals.css` `@theme`: `--color-surface`, `--color-surface-muted`, `--color-border`, `--color-text`, `--color-text-muted`, `--color-accent: #4f46e5` (indigo-600), `--color-danger: #b91c1c`. Remove the legacy `@media prefers-color-scheme` block; use Tailwind's `dark:` class strategy instead. In `layout.tsx`: `const inter = Inter({ subsets:['latin'], variable:'--font-sans' })`, `const mono = JetBrains_Mono({ subsets:['latin'], variable:'--font-mono' })`, apply on `<html>`.
 
-### Step 7: Mermaid rendering island
-- **Files:** `components/features/guidelines/MermaidDiagram.tsx`
-- **What:** Client component that accepts `source: string`, renders SVG.
-- **How:** `'use client'`; `useEffect` imports `mermaid` dynamically, calls `mermaid.initialize({ startOnLoad: false, theme: 'neutral' })` once, then `mermaid.render(id, source)` → `dangerouslySetInnerHTML` with the returned SVG. Wrap in try/catch; on failure, surface a compact error block with the parse message. Ensure `ssr: false` via `next/dynamic` where it's imported.
+### Step 7 — Editor page and Mermaid preview
+- **Files:** `src/app/guidelines/new/page.tsx`, `src/app/guidelines/[guidelineId]/page.tsx`, `src/components/app/guidelines/GuidelineEditor.tsx`, `src/components/app/guidelines/MermaidPreview.tsx`, `src/app/guidelines/new/loading.tsx`, `src/app/guidelines/new/error.tsx`.
+- **What:** Two-pane editor: textarea (left), live preview + action bar (right). Generate → calls `generateAction`; result populates preview. Regenerate → `regenerateAction`. Publish → `publishAction` then show shareable URL via `PublishBar`.
+- **How:** `GuidelineEditor` uses `useFormState` / `useFormStatus` for pending state, `react-hook-form` for client validation (non-empty, ≤25,000 chars), discriminated-union state `{ status: 'idle' | 'generating' | 'ready' | 'error'; … }`. `MermaidPreview` lazy-loaded via `next/dynamic(() => import('./MermaidPreview'), { ssr: false, loading: () => <Spinner/> })`; inside it, `useEffect` calls `mermaid.initialize({ startOnLoad: false, theme: 'neutral' })` once and `mermaid.render(id, source)` on each source change, catching parse errors into an `Alert`.
 
-### Step 8: Editor + preview UI
-- **Files:** `components/features/guidelines/GuidelineEditor.tsx`, `PreviewPane.tsx`
-- **What:** Two-pane editor (grid `lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-6`). Left: title input, source textarea (monospace, min-h-80), "Generate"/"Regenerate" button, validation errors. Right: `PreviewPane` showing one of:
-  - empty: muted placeholder card "Paste guideline text, then Generate."
-  - pending: skeleton + spinner + "Generating — typically under 60 seconds"
-  - ok: `MermaidDiagram` + kind badge + "Publish" + "View source" disclosure (mono drawer)
-  - error: message + "Retry" button (re-invokes regenerate)
-- **How:** `react-hook-form` with `zodResolver(GenerateInput)`, `useFormStatus`/`useTransition` for pending state. State derived from server props + optimistic pending flag. On publish success, show inline card with shareable URL and a "Copy link" button.
+### Step 8 — Published view and shareable URL
+- **Files:** `src/app/published/[slug]/page.tsx`, `src/app/published/[slug]/not-found.tsx`, `src/app/published/[slug]/loading.tsx`, `src/components/app/published/PublishedView.tsx`.
+- **What:** Read-only public page rendering the snapshot.
+- **How:** Server Component: `const row = await getPublishedBySlug(params.slug); if (!row) notFound();`. Pass `mermaidSource` + `title` into `<PublishedView>` which composes `<MermaidPreview readOnly source={...} />`. `generateMetadata` sets `title` + `openGraph`. No edit controls.
 
-### Step 9: App routes
-- **Files:** `app/layout.tsx`, `app/page.tsx`, `app/guidelines/new/page.tsx`, `app/guidelines/[guidelineId]/page.tsx`, `app/guidelines/[guidelineId]/{loading,error}.tsx`, `app/g/[slug]/page.tsx`, `app/g/[slug]/not-found.tsx`, `app/api/health/route.ts`
-- **What:** Wire Server Components to repo; public `/g/[slug]` renders title, date, kind, and the diagram, no edit controls.
-- **How:** `params` is awaited (Next 15+). Public page uses `notFound()` when slug missing. Layout header = product name + subtle divider; footer minimal.
+### Step 9 — Landing page + API route
+- **Files:** `src/app/page.tsx`, `src/app/api/guidelines/[guidelineId]/route.ts`.
+- **What:** Replace boilerplate landing with a restrained intro + primary CTA to `/guidelines/new`. Add `GET` route for fetching a guideline snapshot (used by client after regenerate to re-fetch canonical state).
+- **How:** Landing is an RSC, single-column hero with `h1`, supporting paragraph, `<Button variant="primary" asChild>`. Route Handler: Zod-parse `guidelineId`, delegate to `services/guidelines.getGuidelineById` + `services/visualizations.getDraft`, return `NextResponse.json(...)` with the documented error envelope on failure.
 
-### Step 10: Manual verification against ACs
-- **Files:** n/a
-- **What:** Run `pnpm dev`, exercise the golden path and edge cases:
-  1. Paste leave-request procedure (Example 1) → flowchart appears within 60s → publish → open `/g/:slug` in incognito.
-  2. Paste a declarative policy paragraph → infographic-style Mermaid renders.
-  3. Submit empty textarea → validation blocks (AC7).
-  4. Paste > 2000 words → service returns `OVERSIZED` error with retry (AC6, Example 2).
-  5. Temporarily break `ANTHROPIC_API_KEY` → MODEL_ERROR path renders retry card.
-  6. Edit source, click Regenerate → preview replaces (AC4).
-- **How:** Document any gaps; do not mark complete if any AC fails.
+### Step 10 — Manual verification
+- **What:** Run `pnpm dev`, walk through example 1 (procedural → flowchart), example 2 (empty + oversized → validation errors), regenerate with tweaked text, publish, open shareable URL in a new browser session, verify no author cookie is required. Run `pnpm exec tsc --noEmit` and `pnpm exec eslint .`.
 
 ---
 
@@ -136,24 +158,33 @@ Build a Next.js feature that lets an Author paste a policy/procedure text, runs 
 
 | Criterion | How It Is Satisfied |
 |-----------|---------------------|
-| AC1 | `createGuidelineAction` inserts `guidelines` + pending `generations` row on submit |
-| AC2 | LLM prompt emits `kind: 'flowchart'` for procedural input; `MermaidDiagram` renders it |
-| AC3 | LLM prompt emits `kind: 'infographic'` (subgraph-grid Mermaid) for declarative input; same renderer |
-| AC4 | `regenerateAction` updates source and inserts a new generation; preview re-renders on server round-trip |
-| AC5 | `publishAction` inserts `publications` with nanoid slug; `/g/[slug]` Server Component serves read-only view |
-| AC6 | Generation errors mark the row `error` with message; PreviewPane shows message + Retry |
-| AC7 | Zod `min(1)` on `sourceText` + HTML `required`; react-hook-form shows field error, action refuses submission |
-| AC8 | 60s `AbortController` timeout on the Anthropic call; pending state communicates expected latency |
+| AC1 (R1) submit → job created | `generateAction` validates input, inserts `guidelines` row, then a `generation_jobs` row on completion (Step 5). |
+| AC2 (R2/R3) procedural → flowchart preview | AI service emits `kind:'flowchart'` Mermaid `flowchart TD`; `MermaidPreview` renders it (Steps 4, 7). |
+| AC3 (R2/R3) declarative → infographic preview | AI service emits `kind:'infographic'` Mermaid `mindmap`; same renderer (Steps 4, 7). |
+| AC4 (R4) edit + regenerate → preview replaced | `regenerateAction` updates `guidelines.source_text` and upserts draft visualization; `GuidelineEditor` refreshes preview state (Steps 3, 5, 7). |
+| AC5 (R5/R6) publish → stable URL | `publishAction` snapshots into `published_visualizations` with unique `slug`; `/published/[slug]` renders it (Steps 3, 5, 8). |
+| AC6 (R9) failure → visible error + retry | Actions return `{ ok:false, error }`; `GuidelineEditor` shows `Alert` with retry button calling the same action (Steps 5, 7). |
+| AC7 (R1) empty input → validation message | `GuidelineInputSchema.min(1)` enforced both client-side (RHF) and server-side (action); inline field error + disabled submit (Steps 5, 7). |
+| AC8 (R7) ≤2,000 words → preview < 60s | Synchronous call path, 25,000-char cap, single retry; no queue overhead. Measured via `generation_jobs.latency_ms`. |
+
+---
+
+## Deliberate Deviations
+
+- **No real auth.** Convention §17 requires auth checks; we use an anonymous cookie-scoped `author_id` as a stand-in so the column exists without gating progress. To be replaced when the auth module lands; flagged in `author_id` column comment and `session.ts`.
+- **No `contexts/` or `hooks/` folders yet.** Convention lists them as part of the canonical tree but this feature needs neither. Creating empty scaffolding would be speculative.
 
 ---
 
 ## Out of Scope
 
-- Authentication/authorization (single-tenant assumed; add in a follow-up).
-- Export to PNG/SVG/PDF (R8 — `mermaid.render` already returns SVG, so a download button is a small follow-up).
-- Collaborative editing, approval workflows, role gates (explicitly out per requirement §4).
-- Background worker / queue — generation runs inline for MVP; schema supports future worker without migration.
-- Rate limiting and per-user quotas on the Anthropic call.
-- Custom theming of the Mermaid output beyond the default `neutral` theme.
+- Authentication, authorization, and role-based gating.
+- Approval workflows, multi-author collaboration, comments.
+- Non-text inputs (PDF, DOCX, images, audio).
+- Localization / translation.
+- PNG/SVG/PDF export (R8, marked MAY).
+- Reader analytics.
+- Background job queue / worker process.
+- Rate limiting (to be added with auth).
 
 ---
