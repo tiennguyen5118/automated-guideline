@@ -30,6 +30,10 @@ jobs:
             REMOTE_URL="https://${GH_PAT}@github.com/${GH_REPO}.git"
             if [ -d "$REPO_DIR/.git" ]; then
               git -C "$REPO_DIR" remote set-url origin "$REMOTE_URL"
+            elif [ -d "$REPO_DIR" ]; then
+              git -C "$REPO_DIR" init
+              git -C "$REPO_DIR" remote add origin "$REMOTE_URL" 2>/dev/null || \
+                git -C "$REPO_DIR" remote set-url origin "$REMOTE_URL"
             else
               git clone "$REMOTE_URL" "$REPO_DIR"
             fi
